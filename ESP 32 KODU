@@ -3,8 +3,8 @@
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 
-const char* ssid = "UGUR";
-const char* password = "12345678";
+const char* ssid = "AĞ ADI";
+const char* password = "AĞ ŞİFRESİ";
 
 AsyncWebServer server(80);
 
