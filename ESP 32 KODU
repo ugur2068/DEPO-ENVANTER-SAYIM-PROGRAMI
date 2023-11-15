@@ -1,0 +1,382 @@
+#include <WiFi.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+#include <EEPROM.h>
+
+const char* ssid = "UGUR";
+const char* password = "12345678";
+
+AsyncWebServer server(80);
+
+struct Product
+{
+  String name;
+  String unit;
+  int quantity;
+};
+
+Product products[1500]; // Increased to 1500 products
+
+struct Delivery
+{
+  String firstName;
+  String lastName;
+  String productName;
+  int quantity;
+  bool isEKLENEN;
+};
+
+Delivery deliveries[10];
+
+struct Transaction
+{
+  String name;
+  String type;
+  int quantity;
+  String unit;
+};
+
+Transaction transactions[20];
+
+void saveToEEPROM()
+{
+  for (int i = 0; i < 1500; i++)
+  {
+    int addr = i * sizeof(Product);
+    EEPROM.put(addr, products[i]);
+  }
+
+  for (int i = 0; i < 10; i++)
+  {
+    int addr = 1500 * sizeof(Product) + i * sizeof(Delivery);
+    EEPROM.put(addr, deliveries[i]);
+  }
+
+  for (int i = 0; i < 20; i++)
+  {
+    int addr = 1510 * sizeof(Product) + i * sizeof(Transaction);
+    EEPROM.put(addr, transactions[i]);
+  }
+
+  EEPROM.commit();
+}
+
+void loadFromEEPROM()
+{
+  for (int i = 0; i < 1500; i++)
+  {
+    int addr = i * sizeof(Product);
+    EEPROM.get(addr, products[i]);
+  }
+
+  for (int i = 0; i < 10; i++)
+  {
+    int addr = 1500 * sizeof(Product) + i * sizeof(Delivery);
+    EEPROM.get(addr, deliveries[i]);
+  }
+
+  for (int i = 0; i < 20; i++)
+  {
+    int addr = 1510 * sizeof(Product) + i * sizeof(Transaction);
+    EEPROM.get(addr, transactions[i]);
+  }
+}
+
+void setup()
+{
+  Serial.begin(115200);
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(1000);
+    Serial.println("Connecting to WiFi...");
+  }
+  Serial.println("Connected to WiFi");
+
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  loadFromEEPROM();
+
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    String html = "<html><head><style>\
+                  body { font-family: Arial, sans-serif; }\
+                  h1 { color: #3498db; text-align: center; }\
+                  table { border-collapse: collapse; width: 80%; margin: 20px auto; }\
+                  th, td { border: 1px solid #3498db; padding: 8px; text-align: left; }\
+                  th { background-color: #3498db; color: white; }\
+                  form { margin-top: 20px; text-align: center; }\
+                  label { display: inline-block; width: 100px; margin-bottom: 10px; color: #34495e; }\
+                  input[type='text'], input[type='number'], input[type='submit'] { padding: 10px; margin-bottom: 10px; width: 250px; border: 1px solid #3498db; border-radius: 4px; box-sizing: border-box; }\
+                  input[type='submit'] { background-color: #3498db; color: #fff; cursor: pointer; }\
+                  #clock { text-align: center; font-size: 24px; margin-top: 20px; }\
+                  #deliveriesList { padding-left: 20px; padding-top: 20px; }\
+                  #historyTable { margin-top: 20px; }\
+                  #btnContainer { text-align: right; }\
+                  </style></head><body>\
+                  <h1>DEPO SAYIMI</h1>\
+                  <div id='btnContainer'>\
+                    <a href='/allProducts' class='button'>TUM URUNLER</a>\
+                  </div>\
+                  <div id='clock'></div>\
+                  <p>IP Adresi: ";
+    html += WiFi.localIP().toString();
+    html += "</p>\
+                  <form method='post' action='/search'>\
+                    <label>Ara:</label> <input type='text' name='searchProduct' required><br>\
+                    <input type='submit' value='Ara'>\
+                  </form>\
+                  <table>\
+                    <tr>\
+                      <th>Urun Adi</th>\
+                      <th>Miktar</th>\
+                      <th>Birim</th>\
+                    </tr>";
+
+    // Tabloya verileri ekle
+    for (int i = 0; i < 1500; i++)
+    {
+      if (!products[i].name.isEmpty())
+      {
+        html += "<tr>\
+                  <td>" + products[i].name + "</td>\
+                  <td>" + String(products[i].quantity) + "</td>\
+                  <td>" + products[i].unit + "</td>\
+                  </tr>";
+      }
+    }
+
+    html += "</table>\
+            <form method='post' action='/update'>\
+              <label>Urun Adi:</label> <input type='text' name='productName' required><br>\
+              <label>Miktar:</label> <input type='number' name='quantity' required><br>\
+              <label>Birim:</label> <input type='text' name='unit' required><br>\
+              <input type='submit' value='Guncelle'>\
+            </form>\
+            <form method='post' action='/delivery'>\
+              <label>Isim:</label> <input type='text' name='firstName' required><br>\
+              <label>Soyisim:</label> <input type='text' name='lastName' required><br>\
+              <label>Urun Adi:</label> <input type='text' name='deliveryProductName' required><br>\
+              <label>Miktar:</label> <input type='number' name='deliveryQuantity' required><br>\
+              <label>Islem Turu:</label>\
+              <select name='deliveryType'>\
+                <option value='EKLENEN'>Ekleme</option>\
+                <option value='VERILEN'>Cikarma</option>\
+              </select><br>\
+              <input type='submit' value='Teslimat'>\
+            </form>\
+            <form method='get' action='/export'>\
+              <input type='submit' value='Verileri Exele Aktar'>\
+            </form>\
+            <script>\
+              function updateClock() {\
+                var now = new Date();\
+                var hours = now.getHours();\
+                var minutes = now.getMinutes();\
+                var seconds = now.getSeconds();\
+                var timeString = hours + ':' + (minutes < 10 ? '0' : '') + minutes + ':' + (seconds < 10 ? '0' : '') + seconds;\
+                document.getElementById('clock').innerText = timeString;\
+              }\
+              setInterval(updateClock, 1000);\
+            </script>\
+            </body></html>";
+
+    request->send(200, "text/html", html);
+  });
+
+  server.on("/allProducts", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    String html = "<html><head><style>\
+                  body { font-family: Arial, sans-serif; }\
+                  h1 { color: #3498db; text-align: center; }\
+                  table { border-collapse: collapse; width: 80%; margin: 20px auto; }\
+                  th, td { border: 1px solid #3498db; padding: 8px; text-align: left; }\
+                  th { background-color: #3498db; color: white; }\
+                  #btnContainer { text-align: right; }\
+                  </style></head><body>\
+                  <h1>TUM URUNLERr</h1>\
+                  <div id='btnContainer'>\
+                    <a href='/' class='button'>Ana Sayfa</a>\
+                  </div>\
+                  <table>\
+                    <tr>\
+                      <th>Urun Adi</th>\
+                      <th>Miktar</th>\
+                      <th>Birim</th>\
+                    </tr>";
+
+    // Tabloya verileri ekle
+    for (int i = 0; i < 1500; i++)
+    {
+      if (!products[i].name.isEmpty())
+      {
+        html += "<tr>\
+                  <td>" + products[i].name + "</td>\
+                  <td>" + String(products[i].quantity) + "</td>\
+                  <td>" + products[i].unit + "</td>\
+                  </tr>";
+      }
+    }
+
+    html += "</table>\
+            </body></html>";
+
+    request->send(200, "text/html", html);
+  });
+
+  server.on("/search", HTTP_POST, [](AsyncWebServerRequest *request)
+  {
+    String searchProduct = request->arg("searchProduct");
+
+    String resultHtml = "<html><head><style>\
+                      body { font-family: Arial, sans-serif; text-align: center; }\
+                      h2 { color: #3498db; }\
+                      p { color: #e74c3c; }\
+                      #btnContainer { text-align: right; }\
+                      </style></head><body>\
+                      <div id='btnContainer'>\
+                        <a href='/' class='button'>Ana Sayfa</a>\
+                      </div>";
+
+    bool found = false;
+
+    for (int i = 0; i < 1500; i++)
+    {
+      if (!products[i].name.isEmpty() && products[i].name == searchProduct)
+      {
+        found = true;
+        resultHtml += "<h2>Urun Bulundu</h2>";
+        resultHtml += "<p>" + searchProduct + " malzemesinden " + String(products[i].quantity) + " " + products[i].unit + " bulunmaktadir.</p>";
+        break;
+      }
+    }
+
+    if (!found)
+    {
+      resultHtml += "<h2>Urun Bulunamadi</h2>";
+      resultHtml += "<p>" + searchProduct + " malzemesi bulunamadi.</p>";
+    }
+
+    resultHtml += "</body></html>";
+
+    request->send(200, "text/html", resultHtml);
+  });
+
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request)
+  {
+    String productName = request->arg("productName");
+    int quantity = request->arg("quantity").toInt();
+    String unit = request->arg("unit");
+
+    for (int i = 0; i < 1500; i++)
+    {
+      if (products[i].name.isEmpty())
+      {
+        products[i].name = productName;
+        products[i].quantity = quantity;
+        products[i].unit = unit;
+        break;
+      }
+      else if (products[i].name == productName)
+      {
+        products[i].quantity += quantity;
+        products[i].unit = unit;
+        break;
+      }
+    }
+
+    // Islem gecmisine ekle
+    for (int i = 0; i < 20; i++)
+    {
+      if (transactions[i].name.isEmpty())
+      {
+        transactions[i].name = productName;
+        transactions[i].type = (quantity > 0) ? "EKLENEN" : "CIKARILAN";
+        transactions[i].quantity = quantity;
+        transactions[i].unit = unit;
+        break;
+      }
+    }
+
+    saveToEEPROM();
+
+    request->redirect("/");
+  });
+
+  server.on("/delivery", HTTP_POST, [](AsyncWebServerRequest *request)
+  {
+    String firstName = request->arg("firstName");
+    String lastName = request->arg("lastName");
+    String deliveryProductName = request->arg("deliveryProductName");
+    int deliveryQuantity = request->arg("deliveryQuantity").toInt();
+    String deliveryType = request->arg("deliveryType");
+
+    for (int i = 0; i < 10; i++)
+    {
+      if (deliveries[i].firstName.isEmpty())
+      {
+        deliveries[i].firstName = firstName;
+        deliveries[i].lastName = lastName;
+        deliveries[i].productName = deliveryProductName;
+        deliveries[i].quantity = deliveryQuantity;
+        deliveries[i].isEKLENEN = (deliveryType == "EKLENEN");
+        break;
+      }
+    }
+
+    // Envantara teslimati uygula
+    for (int i = 0; i < 1500; i++)
+    {
+      if (!products[i].name.isEmpty() && products[i].name == deliveryProductName)
+      {
+        if (deliveryType == "EKLENEN")
+        {
+          products[i].quantity += deliveryQuantity;
+        }
+        else if (deliveryType == "CIKARILAN" && products[i].quantity >= deliveryQuantity)
+        {
+          products[i].quantity -= deliveryQuantity;
+        }
+        break;
+      }
+    }
+
+    saveToEEPROM();
+
+    request->redirect("/");
+  });
+
+  server.on("/export", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    String csvData = "Urun Adi,Miktar,Birim\n";
+
+    for (int i = 0; i < 1500; i++)
+    {
+      if (!products[i].name.isEmpty())
+      {
+        csvData += products[i].name + "," + String(products[i].quantity) + "," + products[i].unit + "\n";
+      }
+    }
+
+    // Add transaction history to CSV
+    csvData += "\nIsim,Islem Turu,Miktar,Birim\n";
+    for (int i = 0; i < 20; i++)
+    {
+      if (!transactions[i].name.isEmpty())
+      {
+        csvData += transactions[i].name + "," + transactions[i].type + "," + String(transactions[i].quantity) + "," + transactions[i].unit + "\n";
+      }
+    }
+
+    request->send(200, "text/csv", csvData);
+  });
+
+  server.begin();
+}
+
+void loop()
+{
+  // Nothing to do here
+}
